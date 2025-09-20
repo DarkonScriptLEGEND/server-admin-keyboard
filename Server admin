@@ -1,7 +1,7 @@
 
--- damage / delete setup for server admin
+-- fling setup for server admin
 
--- LocalScript: AoE Kill + WalkSpeed Boosts
+-- LocalScript: AoE Fling + WalkSpeed Boosts
 -- Place in StarterPlayerScripts
 
 local Players = game:GetService("Players")
@@ -11,14 +11,14 @@ local Workspace = game:GetService("Workspace")
 
 -- CONFIG
 local ACTIONS = {
-	Z = { radius = 500, damage = math.huge, ws = 80, wsDuration = 1.2, wsCooldown = 4.5 }, -- WalkSpeed 80 now
-	V = { radius = 20,  damage = 752000000 },
-	C = { radius = 150, damage = 9425010018203, ws = 32, wsDuration = 4, wsDelay = 3, wsCooldown = 2 },
+	Z = { radius = 500, ws = 80, wsDuration = 1.2, wsCooldown = 4.5 },
+	V = { radius = 20 },
+	C = { radius = 150, ws = 32, wsDuration = 4, wsDelay = 3, wsCooldown = 2 },
 }
 
 local keyCooldowns = { Z = 0, C = 0 }
 
--- Utility: find HumanoidRootPart
+-- Utility: get HumanoidRootPart
 local function getRootPart(model)
 	if not model or not model:IsA("Model") then return nil end
 	return model:FindFirstChild("HumanoidRootPart") 
@@ -26,52 +26,24 @@ local function getRootPart(model)
 		or model:FindFirstChild("UpperTorso")
 end
 
--- Play deletion effects
-local function playDeletionEffect(model)
+-- Fling humanoid away
+local function flingHumanoid(model)
 	if not model or not model.Parent then return end
+	local root = getRootPart(model)
+	if not root or not root:IsA("BasePart") then return end
+	if root.CanCollide == false then return end
 
-	task.delay(3, function()
-		if not model or not model.Parent then return end
+	-- Apply massive velocity in random direction
+	local bodyVelocity = Instance.new("BodyVelocity")
+	bodyVelocity.MaxForce = Vector3.new(1e6, 1e6, 1e6)
+	bodyVelocity.Velocity = Vector3.new(math.random(-1,1), math.random(0,1), math.random(-1,1)).Unit * 69420
+	bodyVelocity.Parent = root
 
-		for _, part in ipairs(model:GetDescendants()) do
-			if part:IsA("BasePart") then
-				part.Color = Color3.fromRGB(0, 162, 232) -- Shield blue
-			end
-		end
-
-		task.delay(1.5, function()
-			if not model or not model.Parent then return end
-			for _, part in ipairs(model:GetDescendants()) do
-				if part:IsA("BasePart") then
-					local fire = Instance.new("ParticleEmitter")
-					fire.Texture = "rbxassetid://241594419"
-					fire.Lifetime = NumberRange.new(1)
-					fire.Rate = 200
-					fire.Speed = NumberRange.new(5, 10)
-					fire.Parent = part
-					task.delay(1, function()
-						if fire and fire.Parent then fire:Destroy() end
-					end)
-				end
-			end
-
-			local sound = Instance.new("Sound")
-			sound.SoundId = "rbxassetid://12222185"
-			sound.Volume = 2
-			sound.PlayOnRemove = true
-			sound.Parent = model
-			sound:Destroy()
-
-			task.delay(1, function()
-				if model and model.Parent then
-					model:Destroy()
-				end
-			end)
-		end)
-	end)
+	-- Remove after 0.5s to avoid physics issues
+	game:GetService("Debris"):AddItem(bodyVelocity, 0.5)
 end
 
--- Kill / damage function with WalkSpeed
+-- AoE fling / WalkSpeed
 local function affectHumanoids(key)
 	local cfg = ACTIONS[key]
 	if not cfg then return end
@@ -86,15 +58,13 @@ local function affectHumanoids(key)
 	local humanoid = char:FindFirstChildOfClass("Humanoid")
 
 	for _, obj in ipairs(Workspace:GetDescendants()) do
-		if obj:IsA("Humanoid") and obj.Health > 0 then
+		if obj:IsA("Humanoid") then
 			local model = obj.Parent
 			if model and model ~= char then
-				local rootPart = getRootPart(model)
-				if rootPart and (rootPart.Position - pos).Magnitude <= cfg.radius then
-					obj.Health = obj.Health - cfg.damage
-					if obj.Health <= 0 then
-						playDeletionEffect(model)
-					end
+				local hrp = getRootPart(model)
+				if hrp and (hrp.Position - pos).Magnitude <= (cfg.radius or 0) then
+					-- Only fling if CanCollide = true
+					flingHumanoid(model)
 				end
 			end
 		end
@@ -140,6 +110,7 @@ UserInputService.InputBegan:Connect(function(input, gp)
 		affectHumanoids("C")
 	end
 end)
+
 
 
 
