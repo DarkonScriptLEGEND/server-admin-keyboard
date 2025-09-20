@@ -1,35 +1,44 @@
 
 -- damage / delete setup for server admin
 
--- AoEActionServer
--- Server-authoritative AoE damage / delete handler
--- Place this script in ServerScriptService
+-- AoEActionClient_Local
+-- LocalScript (client-only). Place in StarterPlayerScripts.
+-- NOTE: client-side changes are local only; to make effects authoritative you must also run server-side logic.
 
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
-local event = ReplicatedStorage:WaitForChild("AoEActionEvent")
+local player = Players.LocalPlayer
 
 -- CONFIG
 local ACTIONS = {
-    Z = { radius = 500, type = "delete", cooldown = 2 },         -- deletes humanoids/models
+    Z = { radius = 500, type = "delete", cooldown = 2 },         -- local delete
     V = { radius = 20,  type = "damage", amount = 752000000, cooldown = 1 },
     C = { radius = 150, type = "damage", amount = 9425010018203, cooldown = 1 },
 }
 
--- If true, actions will only affect NPCs (non-player characters).
--- If false, actions may also affect player characters (be careful on public servers).
+-- If true, local effects will skip player characters (only NPCs affected locally)
 local RESTRICT_TO_NPCS = false
 
--- Developer-only safe mode: if you want only certain UserIds to be allowed, add them here.
--- Example: ALLOWED_USERIDS = {12345678}
-local ALLOWED_USERIDS = nil -- set to a table of UserIds to restrict, or leave nil to allow everyone.
+-- If true, will try to FireServer("Z"/"V"/"C") to a RemoteEvent named REMOTE_NAME.
+-- If you want authoritative behavior, set true and ensure a server RemoteEvent handler exists.
+local FIRE_TO_SERVER = false
+local REMOTE_NAME = "AoEActionEvent"
 
-local cooldowns = {} -- cooldowns[player.UserId] = timestamp of next allowed action
-local function now() return os.clock() end
+-- Debugging
+local DEBUG = false
 
--- Helper: find the HumanoidRootPart (or Torso / UpperTorso / LowerTorso) for a model
+-- cooldowns per key
+local cooldowns = {}
+
+local function dbg(...)
+    if DEBUG then
+        print("[AoEClient]", ...)
+    end
+end
+
 local function getRootPart(model)
     if not model or not model:IsA("Model") then return nil end
     return model:FindFirstChild("HumanoidRootPart")
@@ -38,17 +47,15 @@ local function getRootPart(model)
         or model:FindFirstChild("LowerTorso")
 end
 
--- Helper: check whether the model is a player's character
 local function isPlayerCharacter(model)
-    if not model then return false end
     return Players:GetPlayerFromCharacter(model) ~= nil
 end
 
--- Helper: safely apply damage
-local function applyDamage(humanoid, amount)
+local function applyDamageLocal(humanoid, amount)
     if not humanoid or humanoid.Health == nil then return end
     if humanoid.Health <= 0 then return end
     local ok, err = pcall(function()
+        -- Prefer TakeDamage if present for proper events; otherwise adjust Health locally
         if typeof(humanoid.TakeDamage) == "function" then
             humanoid:TakeDamage(amount)
         else
@@ -56,88 +63,95 @@ local function applyDamage(humanoid, amount)
         end
     end)
     if not ok then
-        warn("applyDamage error:", err)
+        warn("applyDamageLocal error:", err)
     end
 end
 
--- Helper: safely delete humanoid & model
-local function deleteModel(humanoid)
+local function deleteModelLocal(humanoid)
     if not humanoid then return end
     local model = humanoid.Parent
-    if not model then
-        pcall(function() humanoid:Destroy() end)
-        return
-    end
     pcall(function()
-        -- set Health to 0 if available and destroy humanoid
         if humanoid.Health ~= nil then
             humanoid.Health = 0
         end
         humanoid:Destroy()
     end)
-    -- attempt to break joints and destroy model
     pcall(function()
-        if model.Parent then
+        if model and model.Parent then
             model:BreakJoints()
             wait(0.03)
-            if model.Parent then
+            if model and model.Parent then
                 model:Destroy()
             end
         end
     end)
 end
 
--- Server event
-event.OnServerEvent:Connect(function(player, actionKey)
-    -- Basic validation of parameters
-    if typeof(actionKey) ~= "string" then return end
-    actionKey = actionKey:upper()
-    local cfg = ACTIONS[actionKey]
+-- find RemoteEvent if present
+local remoteEvent = ReplicatedStorage:FindFirstChild(REMOTE_NAME)
+if FIRE_TO_SERVER and not remoteEvent then
+    warn(("AoEActionClient: FIRE_TO_SERVER is true but %q not found in ReplicatedStorage."):format(REMOTE_NAME))
+end
+
+local function canUse(key)
+    local cfg = ACTIONS[key]
+    if not cfg then return false end
+    local t = tick()
+    if cooldowns[key] and t < cooldowns[key] then
+        if DEBUG then
+            dbg(("Key %s on cooldown (%.2f s left)"):format(key, cooldowns[key]-t))
+        end
+        return false
+    end
+    cooldowns[key] = t + (cfg.cooldown or 1)
+    return true
+end
+
+local function performActionLocal(key)
+    local cfg = ACTIONS[key]
     if not cfg then return end
 
-    -- Optional permission check
-    if ALLOWED_USERIDS then
-        local allowed = false
-        for _, id in ipairs(ALLOWED_USERIDS) do
-            if player.UserId == id then allowed = true break end
-        end
-        if not allowed then return end
-    end
-
-    -- Rate limit
-    local uid = player.UserId
-    local t = now()
-    if cooldowns[uid] and t < cooldowns[uid] then
+    -- If configured to forward to the server, do that and return
+    if FIRE_TO_SERVER and remoteEvent and remoteEvent:IsA("RemoteEvent") then
+        pcall(function()
+            remoteEvent:FireServer(key)
+        end)
         return
     end
-    cooldowns[uid] = t + (cfg.cooldown or 1)
 
-    -- Validate player's character and root
+    -- Client-only processing
     local char = player.Character
-    if not char then return end
+    if not char then
+        dbg("No character yet; aborting action", key)
+        return
+    end
     local prt = getRootPart(char)
-    if not prt then return end
-    local ppos = prt.Position
+    if not prt then
+        dbg("No rootpart on player; aborting action", key)
+        return
+    end
+    local origin = prt.Position
 
-    -- Iterate humanoids in workspace
-    local descendants = Workspace:GetDescendants()
-    for _, obj in ipairs(descendants) do
+    local found = 0
+    for _, obj in ipairs(Workspace:GetDescendants()) do
         if obj:IsA("Humanoid") then
             local humanoid = obj
             local model = humanoid.Parent
             if model and model ~= char then
-                -- If restricting to NPCs, skip player characters
                 if RESTRICT_TO_NPCS and isPlayerCharacter(model) then
                     -- skip players
                 else
                     local root = getRootPart(model)
                     if root then
-                        local dist = (root.Position - ppos).Magnitude
+                        local dist = (root.Position - origin).Magnitude
                         if dist <= cfg.radius then
+                            found = found + 1
                             if cfg.type == "damage" then
-                                pcall(applyDamage, humanoid, cfg.amount)
+                                pcall(applyDamageLocal, humanoid, cfg.amount)
+                                dbg(("Damaged %s (dist %.2f) by %s"):format(model.Name, dist, tostring(cfg.amount)))
                             elseif cfg.type == "delete" then
-                                pcall(deleteModel, humanoid)
+                                pcall(deleteModelLocal, humanoid)
+                                dbg(("Deleted %s (dist %.2f)"):format(model.Name, dist))
                             end
                         end
                     end
@@ -145,7 +159,29 @@ event.OnServerEvent:Connect(function(player, actionKey)
             end
         end
     end
+
+    if DEBUG then
+        dbg(("Action %s: processed %d targets"):format(key, found))
+    end
+end
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+
+    if input.KeyCode == Enum.KeyCode.Z then
+        if canUse("Z") then performActionLocal("Z") end
+    elseif input.KeyCode == Enum.KeyCode.V then
+        if canUse("V") then performActionLocal("V") end
+    elseif input.KeyCode == Enum.KeyCode.C then
+        if canUse("C") then performActionLocal("C") end
+    end
 end)
+
+-- Optional: expose a small API to toggle debug from the command bar
+if DEBUG then
+    print("[AoEActionClient] Debug ON. RESTRICT_TO_NPCS =", RESTRICT_TO_NPCS, "FIRE_TO_SERVER =", FIRE_TO_SERVER)
+end
 
 -- server admin with mobile keyboard (User: Darkonsupersmashbros) --
            -- Credits to the Creator --
