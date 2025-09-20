@@ -1,7 +1,7 @@
 
 -- fling setup for server admin
 
--- LocalScript: AoE Fling + WalkSpeed Boosts (Fixed)
+-- LocalScript: AoE Fling + WalkSpeed Boosts (Working)
 -- Place in StarterPlayerScripts
 
 local Players = game:GetService("Players")
@@ -26,16 +26,28 @@ local function getRootPart(model)
 		or model:FindFirstChild("UpperTorso")
 end
 
--- Fling humanoid using AssemblyLinearVelocity
+-- Fling humanoid away
 local function flingHumanoid(model, origin)
 	if not model or not model.Parent then return end
 	local root = getRootPart(model)
 	if not root or not root:IsA("BasePart") then return end
 	if not root.CanCollide then return end
 
-	-- Compute direction away from origin
-	local dir = (root.Position - origin).Unit
-	root.AssemblyLinearVelocity = dir * 69420
+	local humanoid = model:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		local prevPlatformStand = humanoid.PlatformStand
+		humanoid.PlatformStand = true -- allow physics to move freely
+
+		local dir = (root.Position - origin).Unit
+		root.AssemblyLinearVelocity = dir * 69420
+
+		-- Restore PlatformStand after short delay
+		task.delay(0.5, function()
+			if humanoid then
+				humanoid.PlatformStand = prevPlatformStand
+			end
+		end)
+	end
 end
 
 -- AoE fling / WalkSpeed
@@ -104,6 +116,7 @@ UserInputService.InputBegan:Connect(function(input, gp)
 		affectHumanoids("C")
 	end
 end)
+
 
 
 
