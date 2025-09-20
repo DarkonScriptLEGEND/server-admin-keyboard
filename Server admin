@@ -1,187 +1,206 @@
 
 -- damage / delete setup for server admin
 
--- AoEActionClient_Local
--- LocalScript (client-only). Place in StarterPlayerScripts.
--- NOTE: client-side changes are local only; to make effects authoritative you must also run server-side logic.
+-- LocalScript: AoE Kill + Two-Stage Restore + WalkSpeed Boosts
+-- Place in StarterPlayerScripts
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local LocalPlayer = Players.LocalPlayer
 local Workspace = game:GetService("Workspace")
-
-local player = Players.LocalPlayer
 
 -- CONFIG
 local ACTIONS = {
-    Z = { radius = 500, type = "delete", cooldown = 2 },         -- local delete
-    V = { radius = 20,  type = "damage", amount = 752000000, cooldown = 1 },
-    C = { radius = 150, type = "damage", amount = 9425010018203, cooldown = 1 },
+	Z = { radius = 500, damage = math.huge },
+	V = { radius = 20,  damage = 752000000 },
+	C = { radius = 150, damage = 9425010018203 },
 }
 
--- If true, local effects will skip player characters (only NPCs affected locally)
-local RESTRICT_TO_NPCS = false
+local canKill = true
+local killedModels = {}
+local eStage = 0 -- 0 = nothing, 1 = restored, 2 = unlocked again
+local keyCooldowns = { Z = 0, C = 0 }
 
--- If true, will try to FireServer("Z"/"V"/"C") to a RemoteEvent named REMOTE_NAME.
--- If you want authoritative behavior, set true and ensure a server RemoteEvent handler exists.
-local FIRE_TO_SERVER = false
-local REMOTE_NAME = "AoEActionEvent"
-
--- Debugging
-local DEBUG = false
-
--- cooldowns per key
-local cooldowns = {}
-
-local function dbg(...)
-    if DEBUG then
-        print("[AoEClient]", ...)
-    end
-end
-
+-- Utility: find HumanoidRootPart
 local function getRootPart(model)
-    if not model or not model:IsA("Model") then return nil end
-    return model:FindFirstChild("HumanoidRootPart")
-        or model:FindFirstChild("Torso")
-        or model:FindFirstChild("UpperTorso")
-        or model:FindFirstChild("LowerTorso")
+	if not model or not model:IsA("Model") then return nil end
+	return model:FindFirstChild("HumanoidRootPart") 
+		or model:FindFirstChild("Torso") 
+		or model:FindFirstChild("UpperTorso")
 end
 
-local function isPlayerCharacter(model)
-    return Players:GetPlayerFromCharacter(model) ~= nil
+-- Store original colors
+local function storeOriginalColors(model)
+	local colors = {}
+	for _, part in ipairs(model:GetDescendants()) do
+		if part:IsA("BasePart") then
+			colors[part] = part.Color
+		end
+	end
+	return colors
 end
 
-local function applyDamageLocal(humanoid, amount)
-    if not humanoid or humanoid.Health == nil then return end
-    if humanoid.Health <= 0 then return end
-    local ok, err = pcall(function()
-        -- Prefer TakeDamage if present for proper events; otherwise adjust Health locally
-        if typeof(humanoid.TakeDamage) == "function" then
-            humanoid:TakeDamage(amount)
-        else
-            humanoid.Health = humanoid.Health - amount
-        end
-    end)
-    if not ok then
-        warn("applyDamageLocal error:", err)
-    end
+-- Deletion effect sequence
+local function playDeletionEffect(model)
+	if not model or not model.Parent then return end
+	local originalColors = storeOriginalColors(model)
+	table.insert(killedModels, {model = model, colors = originalColors})
+
+	task.delay(3, function()
+		if not model or not model.Parent then return end
+
+		-- Shield blue
+		for _, part in ipairs(model:GetDescendants()) do
+			if part:IsA("BasePart") then
+				part.Color = Color3.fromRGB(0, 162, 232)
+			end
+		end
+
+		task.delay(1.5, function()
+			if not model or not model.Parent then return end
+
+			-- Blue fire
+			for _, part in ipairs(model:GetDescendants()) do
+				if part:IsA("BasePart") then
+					local fire = Instance.new("ParticleEmitter")
+					fire.Texture = "rbxassetid://241594419"
+					fire.Lifetime = NumberRange.new(1)
+					fire.Rate = 200
+					fire.Speed = NumberRange.new(5,10)
+					fire.Parent = part
+					task.delay(1, function()
+						if fire and fire.Parent then fire:Destroy() end
+					end)
+				end
+			end
+
+			-- Play deletion sound
+			local sound = Instance.new("Sound")
+			sound.SoundId = "rbxassetid://12222185"
+			sound.Volume = 2
+			sound.PlayOnRemove = true
+			sound.Parent = model
+			sound:Destroy()
+
+			-- Delete model
+			task.delay(1, function()
+				if model and model.Parent then
+					model:Destroy()
+				end
+			end)
+		end)
+	end)
 end
 
-local function deleteModelLocal(humanoid)
-    if not humanoid then return end
-    local model = humanoid.Parent
-    pcall(function()
-        if humanoid.Health ~= nil then
-            humanoid.Health = 0
-        end
-        humanoid:Destroy()
-    end)
-    pcall(function()
-        if model and model.Parent then
-            model:BreakJoints()
-            wait(0.03)
-            if model and model.Parent then
-                model:Destroy()
-            end
-        end
-    end)
+-- Kill function with WalkSpeed logic
+local function affectHumanoids(radius, damage, key)
+	if not canKill then return end
+
+	-- Check cooldown
+	local t = tick()
+	if keyCooldowns[key] and t < keyCooldowns[key] then return end
+
+	local char = LocalPlayer.Character
+	if not char then return end
+	local root = getRootPart(char)
+	if not root then return end
+	local pos = root.Position
+	local humanoid = char:FindFirstChildOfClass("Humanoid")
+
+	-- Kill nearby humanoids
+	for _, obj in ipairs(Workspace:GetDescendants()) do
+		if obj:IsA("Humanoid") and obj.Health > 0 then
+			local model = obj.Parent
+			if model and model ~= char then
+				local rootPart = getRootPart(model)
+				if rootPart and (rootPart.Position - pos).Magnitude <= radius then
+					obj.Health = obj.Health - damage
+					if obj.Health <= 0 then
+						playDeletionEffect(model)
+					end
+				end
+			end
+		end
+	end
+
+	-- Apply WalkSpeed changes
+	if humanoid then
+		if key == "Z" then
+			local originalSpeed = humanoid.WalkSpeed
+			humanoid.WalkSpeed = 40
+			task.delay(1.2, function()
+				if humanoid then
+					humanoid.WalkSpeed = originalSpeed
+					keyCooldowns["Z"] = tick() + 4.5 -- cooldown after effect
+				end
+			end)
+		elseif key == "C" then
+			task.delay(3, function()
+				if humanoid then
+					local originalSpeed = humanoid.WalkSpeed
+					humanoid.WalkSpeed = 32
+					task.delay(4, function()
+						if humanoid then
+							humanoid.WalkSpeed = originalSpeed
+							keyCooldowns["C"] = tick() + 2 -- cooldown after effect
+						end
+					end)
+				end
+			end)
+		end
+	end
+
+	canKill = false
+	eStage = 0
 end
 
--- find RemoteEvent if present
-local remoteEvent = ReplicatedStorage:FindFirstChild(REMOTE_NAME)
-if FIRE_TO_SERVER and not remoteEvent then
-    warn(("AoEActionClient: FIRE_TO_SERVER is true but %q not found in ReplicatedStorage."):format(REMOTE_NAME))
+-- Restore killed models (first press of E)
+local function restoreKilled()
+	for _, data in ipairs(killedModels) do
+		local model = data.model
+		if model and not model.Parent then
+			model.Parent = Workspace
+		end
+		if data.colors and model then
+			for part, color in pairs(data.colors) do
+				if part and part.Parent then
+					part.Color = color
+				end
+			end
+		end
+	end
+	eStage = 1
 end
 
-local function canUse(key)
-    local cfg = ACTIONS[key]
-    if not cfg then return false end
-    local t = tick()
-    if cooldowns[key] and t < cooldowns[key] then
-        if DEBUG then
-            dbg(("Key %s on cooldown (%.2f s left)"):format(key, cooldowns[key]-t))
-        end
-        return false
-    end
-    cooldowns[key] = t + (cfg.cooldown or 1)
-    return true
+-- Unlock kill again (second press of E)
+local function unlockKill()
+	canKill = true
+	killedModels = {}
+	eStage = 0
 end
 
-local function performActionLocal(key)
-    local cfg = ACTIONS[key]
-    if not cfg then return end
+-- Keybinds
+UserInputService.InputBegan:Connect(function(input, gp)
+	if gp then return end
+	local key = input.KeyCode
 
-    -- If configured to forward to the server, do that and return
-    if FIRE_TO_SERVER and remoteEvent and remoteEvent:IsA("RemoteEvent") then
-        pcall(function()
-            remoteEvent:FireServer(key)
-        end)
-        return
-    end
-
-    -- Client-only processing
-    local char = player.Character
-    if not char then
-        dbg("No character yet; aborting action", key)
-        return
-    end
-    local prt = getRootPart(char)
-    if not prt then
-        dbg("No rootpart on player; aborting action", key)
-        return
-    end
-    local origin = prt.Position
-
-    local found = 0
-    for _, obj in ipairs(Workspace:GetDescendants()) do
-        if obj:IsA("Humanoid") then
-            local humanoid = obj
-            local model = humanoid.Parent
-            if model and model ~= char then
-                if RESTRICT_TO_NPCS and isPlayerCharacter(model) then
-                    -- skip players
-                else
-                    local root = getRootPart(model)
-                    if root then
-                        local dist = (root.Position - origin).Magnitude
-                        if dist <= cfg.radius then
-                            found = found + 1
-                            if cfg.type == "damage" then
-                                pcall(applyDamageLocal, humanoid, cfg.amount)
-                                dbg(("Damaged %s (dist %.2f) by %s"):format(model.Name, dist, tostring(cfg.amount)))
-                            elseif cfg.type == "delete" then
-                                pcall(deleteModelLocal, humanoid)
-                                dbg(("Deleted %s (dist %.2f)"):format(model.Name, dist))
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    if DEBUG then
-        dbg(("Action %s: processed %d targets"):format(key, found))
-    end
-end
-
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
-    if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
-
-    if input.KeyCode == Enum.KeyCode.Z then
-        if canUse("Z") then performActionLocal("Z") end
-    elseif input.KeyCode == Enum.KeyCode.V then
-        if canUse("V") then performActionLocal("V") end
-    elseif input.KeyCode == Enum.KeyCode.C then
-        if canUse("C") then performActionLocal("C") end
-    end
+	if key == Enum.KeyCode.Z then
+		affectHumanoids(ACTIONS.Z.radius, ACTIONS.Z.damage, "Z")
+	elseif key == Enum.KeyCode.V then
+		affectHumanoids(ACTIONS.V.radius, ACTIONS.V.damage, "V")
+	elseif key == Enum.KeyCode.C then
+		affectHumanoids(ACTIONS.C.radius, ACTIONS.C.damage, "C")
+	elseif key == Enum.KeyCode.E then
+		if eStage == 0 then
+			restoreKilled()
+		elseif eStage == 1 then
+			unlockKill()
+		end
+	end
 end)
 
--- Optional: expose a small API to toggle debug from the command bar
-if DEBUG then
-    print("[AoEActionClient] Debug ON. RESTRICT_TO_NPCS =", RESTRICT_TO_NPCS, "FIRE_TO_SERVER =", FIRE_TO_SERVER)
-end
+
+
 
 -- server admin with mobile keyboard (User: Darkonsupersmashbros) --
            -- Credits to the Creator --
