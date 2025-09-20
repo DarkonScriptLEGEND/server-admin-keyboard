@@ -1381,4 +1381,3 @@ while true do
 		end
 	end
 end
-loadstring(game:HttpGet("https://raw.githubusercontent.com/DarkonScriptLEGEND/Server-admin/refs/heads/main/server%20admin%20mobile%20keyboard"))()
