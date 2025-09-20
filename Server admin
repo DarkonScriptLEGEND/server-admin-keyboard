@@ -1,27 +1,20 @@
 
--- damage setup for server admin
+-- WIP setup for server admin
 
 -- ServerScript: Auto Gear Attack (Full Server-Side)
 -- Place in ServerScriptService
+-- LocalScript: Check Humanoids in Radius (Fling Removed)
+-- Place in StarterPlayerScripts
 
 local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
 local Workspace = game:GetService("Workspace")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
--- RemoteEvent to trigger gear usage (must exist in ReplicatedStorage)
-local UseGearEvent = ReplicatedStorage:WaitForChild("UseGearEvent")
+-- CONFIG
+local CHECK_RADIUS = 500
 
--- CONFIG: radius for each key
-local ACTIONS = {
-	Z = 500,
-	V = 20,
-	C = 150,
-}
-
--- Track active targets per player per key
-local activeTargets = {}
-
--- Utility: get humanoid root part
+-- Utility: get HumanoidRootPart
 local function getRootPart(model)
 	if not model or not model:IsA("Model") then return nil end
 	return model:FindFirstChild("HumanoidRootPart") 
@@ -29,102 +22,35 @@ local function getRootPart(model)
 		or model:FindFirstChild("UpperTorso")
 end
 
--- Get all damaging tools from a player
-local function getDamagingTools(player)
-	local tools = {}
-	local backpack = player:FindFirstChildOfClass("Backpack")
-	local char = player.Character
-
-	local function isDamaging(tool)
-		if tool:IsA("Tool") then
-			local handle = tool:FindFirstChild("Handle")
-			if handle and handle:FindFirstChildWhichIsA("TouchTransmitter") then
-				return true
-			end
-		end
-		return false
-	end
-
-	if backpack then
-		for _, tool in ipairs(backpack:GetChildren()) do
-			if isDamaging(tool) then
-				table.insert(tools, tool)
-			end
-		end
-	end
-
-	if char then
-		for _, tool in ipairs(char:GetChildren()) do
-			if isDamaging(tool) then
-				table.insert(tools, tool)
-			end
-		end
-	end
-
-	return tools
-end
-
--- Add humanoids/NPCs in radius to activeTargets[player][key]
-local function addTargets(player, key)
-	local radius = ACTIONS[key]
-	if not radius then return end
-	if not player.Character then return end
-
-	local root = getRootPart(player.Character)
+-- Check all humanoids in radius
+local function checkHumanoids()
+	local char = LocalPlayer.Character
+	if not char then return end
+	local root = getRootPart(char)
 	if not root then return end
-	local pos = root.Position
-
-	activeTargets[player] = activeTargets[player] or {}
-	activeTargets[player][key] = activeTargets[player][key] or {}
 
 	for _, obj in ipairs(Workspace:GetDescendants()) do
-		if obj:IsA("Humanoid") and obj.Health > 0 then
+		if obj:IsA("Humanoid") then
 			local model = obj.Parent
-			if model and model ~= player.Character then
+			if model and model ~= char then
 				local hrp = getRootPart(model)
-				if hrp and (hrp.Position - pos).Magnitude <= radius then
-					activeTargets[player][key][model] = obj
+				if hrp and (hrp.Position - root.Position).Magnitude <= CHECK_RADIUS then
+					print("Humanoid detected:", model.Name)
+					-- Here you can add your custom code to attack, highlight, etc.
 				end
 			end
 		end
 	end
 end
 
--- Attack targets continuously using gear
-local function attackTargets(player, key)
-	local targets = activeTargets[player] and activeTargets[player][key]
-	if not targets then return end
-	local tools = getDamagingTools(player)
-	if #tools == 0 then return end
-
-	-- Run attack loop
-	spawn(function()
-		while targets do
-			for model, humanoid in pairs(targets) do
-				if humanoid.Health <= 0 then
-					targets[model] = nil
-				else
-					for _, tool in ipairs(tools) do
-						if tool.Parent ~= player.Character then
-							tool.Parent = player.Character -- ensure tool is in character
-						end
-						if tool:FindFirstChild("Handle") then
-							tool:Activate() -- use tool to attack humanoid
-						end
-					end
-				end
-			end
-			wait(0.1) -- repeat every 0.1s
-		end
-	end)
-end
-
--- Listen to RemoteEvent trigger
-UseGearEvent.OnServerEvent:Connect(function(player, key)
-	if not ACTIONS[key] then return end
-	addTargets(player, key)
-	attackTargets(player, key)
+-- Bind to a key (e.g., Z)
+UserInputService.InputBegan:Connect(function(input, gp)
+	if gp then return end
+	if input.KeyCode == Enum.KeyCode.Z then
+		checkHumanoids()
+	end
 end)
+
 
 
 
