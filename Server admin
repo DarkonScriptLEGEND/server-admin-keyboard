@@ -1,7 +1,7 @@
 
 -- fling setup for server admin
 
--- LocalScript: AoE Fling + WalkSpeed Boosts
+-- LocalScript: AoE Fling + WalkSpeed Boosts (Fixed)
 -- Place in StarterPlayerScripts
 
 local Players = game:GetService("Players")
@@ -26,21 +26,16 @@ local function getRootPart(model)
 		or model:FindFirstChild("UpperTorso")
 end
 
--- Fling humanoid away
-local function flingHumanoid(model)
+-- Fling humanoid using AssemblyLinearVelocity
+local function flingHumanoid(model, origin)
 	if not model or not model.Parent then return end
 	local root = getRootPart(model)
 	if not root or not root:IsA("BasePart") then return end
-	if root.CanCollide == false then return end
+	if not root.CanCollide then return end
 
-	-- Apply massive velocity in random direction
-	local bodyVelocity = Instance.new("BodyVelocity")
-	bodyVelocity.MaxForce = Vector3.new(1e6, 1e6, 1e6)
-	bodyVelocity.Velocity = Vector3.new(math.random(-1,1), math.random(0,1), math.random(-1,1)).Unit * 69420
-	bodyVelocity.Parent = root
-
-	-- Remove after 0.5s to avoid physics issues
-	game:GetService("Debris"):AddItem(bodyVelocity, 0.5)
+	-- Compute direction away from origin
+	local dir = (root.Position - origin).Unit
+	root.AssemblyLinearVelocity = dir * 69420
 end
 
 -- AoE fling / WalkSpeed
@@ -63,8 +58,7 @@ local function affectHumanoids(key)
 			if model and model ~= char then
 				local hrp = getRootPart(model)
 				if hrp and (hrp.Position - pos).Magnitude <= (cfg.radius or 0) then
-					-- Only fling if CanCollide = true
-					flingHumanoid(model)
+					flingHumanoid(model, pos)
 				end
 			end
 		end
@@ -110,6 +104,7 @@ UserInputService.InputBegan:Connect(function(input, gp)
 		affectHumanoids("C")
 	end
 end)
+
 
 
 
