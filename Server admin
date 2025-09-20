@@ -1,22 +1,20 @@
 
 -- fling setup for server admin
 
--- LocalScript: AoE Fling + WalkSpeed Boosts (Working)
+-- LocalScript: Extreme Back-and-Forth Fling
 -- Place in StarterPlayerScripts
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
 
 -- CONFIG
-local ACTIONS = {
-	Z = { radius = 500, ws = 80, wsDuration = 1.2, wsCooldown = 4.5 },
-	V = { radius = 20 },
-	C = { radius = 150, ws = 32, wsDuration = 4, wsDelay = 3, wsCooldown = 2 },
-}
-
-local keyCooldowns = { Z = 0, C = 0 }
+local FLING_RADIUS = 500
+local FLING_DURATION = 3
+local FLING_SPEED = 5000 -- times per second
+local FLING_DISTANCE = 10 -- studs per move toward/away
 
 -- Utility: get HumanoidRootPart
 local function getRootPart(model)
@@ -26,96 +24,64 @@ local function getRootPart(model)
 		or model:FindFirstChild("UpperTorso")
 end
 
--- Fling humanoid away
-local function flingHumanoid(model, origin)
-	if not model or not model.Parent then return end
-	local root = getRootPart(model)
-	if not root or not root:IsA("BasePart") then return end
-	if not root.CanCollide then return end
+-- Extreme back-and-forth fling
+local function extremeFling(target)
+	local char = LocalPlayer.Character
+	if not char then return end
+	local humanoid = char:FindFirstChildOfClass("Humanoid")
+	local root = getRootPart(char)
+	if not root then return end
 
-	local humanoid = model:FindFirstChildOfClass("Humanoid")
-	if humanoid then
-		local prevPlatformStand = humanoid.PlatformStand
-		humanoid.PlatformStand = true -- allow physics to move freely
+	local targetRoot = getRootPart(target)
+	if not targetRoot or not targetRoot.CanCollide then return end
 
-		local dir = (root.Position - origin).Unit
-		root.AssemblyLinearVelocity = dir * 69420
+	-- Temporarily allow physics manipulation
+	if humanoid then humanoid.PlatformStand = true end
 
-		-- Restore PlatformStand after short delay
-		task.delay(0.5, function()
-			if humanoid then
-				humanoid.PlatformStand = prevPlatformStand
-			end
-		end)
+	local startTime = tick()
+	local direction = 1
+
+	-- Loop at very high frequency
+	local deltaTime = 1 / FLING_SPEED
+	while tick() - startTime < FLING_DURATION do
+		local moveVector = (targetRoot.Position - root.Position).Unit * FLING_DISTANCE * direction
+		root.CFrame = root.CFrame + moveVector
+		direction = -direction
+		task.wait(deltaTime)
 	end
+
+	-- Restore humanoid
+	if humanoid then humanoid.PlatformStand = false end
 end
 
--- AoE fling / WalkSpeed
-local function affectHumanoids(key)
-	local cfg = ACTIONS[key]
-	if not cfg then return end
-	local t = tick()
-	if keyCooldowns[key] and t < keyCooldowns[key] then return end
-
+-- Check all humanoids in radius
+local function checkAndFling()
 	local char = LocalPlayer.Character
 	if not char then return end
 	local root = getRootPart(char)
 	if not root then return end
-	local pos = root.Position
-	local humanoid = char:FindFirstChildOfClass("Humanoid")
 
 	for _, obj in ipairs(Workspace:GetDescendants()) do
 		if obj:IsA("Humanoid") then
 			local model = obj.Parent
 			if model and model ~= char then
 				local hrp = getRootPart(model)
-				if hrp and (hrp.Position - pos).Magnitude <= (cfg.radius or 0) then
-					flingHumanoid(model, pos)
+				if hrp and hrp.CanCollide and (hrp.Position - root.Position).Magnitude <= FLING_RADIUS then
+					extremeFling(model)
 				end
 			end
 		end
 	end
-
-	-- WalkSpeed logic
-	if humanoid and cfg.ws then
-		if key == "Z" then
-			local originalSpeed = humanoid.WalkSpeed
-			humanoid.WalkSpeed = cfg.ws
-			task.delay(cfg.wsDuration, function()
-				if humanoid then
-					humanoid.WalkSpeed = originalSpeed
-					keyCooldowns[key] = tick() + cfg.wsCooldown
-				end
-			end)
-		elseif key == "C" then
-			task.delay(cfg.wsDelay or 0, function()
-				if humanoid then
-					local originalSpeed = humanoid.WalkSpeed
-					humanoid.WalkSpeed = cfg.ws
-					task.delay(cfg.wsDuration, function()
-						if humanoid then
-							humanoid.WalkSpeed = originalSpeed
-							keyCooldowns[key] = tick() + cfg.wsCooldown
-						end
-					end)
-				end
-			end)
-		end
-	end
 end
 
--- Keybinds
+-- Bind to a key (e.g., Z)
 UserInputService.InputBegan:Connect(function(input, gp)
 	if gp then return end
-	local key = input.KeyCode
-	if key == Enum.KeyCode.Z then
-		affectHumanoids("Z")
-	elseif key == Enum.KeyCode.V then
-		affectHumanoids("V")
-	elseif key == Enum.KeyCode.C then
-		affectHumanoids("C")
+	if input.KeyCode == Enum.KeyCode.Z then
+		checkAndFling()
 	end
 end)
+
 
 
 
