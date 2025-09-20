@@ -1,4 +1,153 @@
- -- server admin with mobile keyboard (User: Darkonsupersmashbros) --
+
+-- damage / delete setup for server admin
+
+-- AoEActionServer
+-- Server-authoritative AoE damage / delete handler
+-- Place this script in ServerScriptService
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+
+local event = ReplicatedStorage:WaitForChild("AoEActionEvent")
+
+-- CONFIG
+local ACTIONS = {
+    Z = { radius = 500, type = "delete", cooldown = 2 },         -- deletes humanoids/models
+    V = { radius = 20,  type = "damage", amount = 752000000, cooldown = 1 },
+    C = { radius = 150, type = "damage", amount = 9425010018203, cooldown = 1 },
+}
+
+-- If true, actions will only affect NPCs (non-player characters).
+-- If false, actions may also affect player characters (be careful on public servers).
+local RESTRICT_TO_NPCS = false
+
+-- Developer-only safe mode: if you want only certain UserIds to be allowed, add them here.
+-- Example: ALLOWED_USERIDS = {12345678}
+local ALLOWED_USERIDS = nil -- set to a table of UserIds to restrict, or leave nil to allow everyone.
+
+local cooldowns = {} -- cooldowns[player.UserId] = timestamp of next allowed action
+local function now() return os.clock() end
+
+-- Helper: find the HumanoidRootPart (or Torso / UpperTorso / LowerTorso) for a model
+local function getRootPart(model)
+    if not model or not model:IsA("Model") then return nil end
+    return model:FindFirstChild("HumanoidRootPart")
+        or model:FindFirstChild("Torso")
+        or model:FindFirstChild("UpperTorso")
+        or model:FindFirstChild("LowerTorso")
+end
+
+-- Helper: check whether the model is a player's character
+local function isPlayerCharacter(model)
+    if not model then return false end
+    return Players:GetPlayerFromCharacter(model) ~= nil
+end
+
+-- Helper: safely apply damage
+local function applyDamage(humanoid, amount)
+    if not humanoid or humanoid.Health == nil then return end
+    if humanoid.Health <= 0 then return end
+    local ok, err = pcall(function()
+        if typeof(humanoid.TakeDamage) == "function" then
+            humanoid:TakeDamage(amount)
+        else
+            humanoid.Health = humanoid.Health - amount
+        end
+    end)
+    if not ok then
+        warn("applyDamage error:", err)
+    end
+end
+
+-- Helper: safely delete humanoid & model
+local function deleteModel(humanoid)
+    if not humanoid then return end
+    local model = humanoid.Parent
+    if not model then
+        pcall(function() humanoid:Destroy() end)
+        return
+    end
+    pcall(function()
+        -- set Health to 0 if available and destroy humanoid
+        if humanoid.Health ~= nil then
+            humanoid.Health = 0
+        end
+        humanoid:Destroy()
+    end)
+    -- attempt to break joints and destroy model
+    pcall(function()
+        if model.Parent then
+            model:BreakJoints()
+            wait(0.03)
+            if model.Parent then
+                model:Destroy()
+            end
+        end
+    end)
+end
+
+-- Server event
+event.OnServerEvent:Connect(function(player, actionKey)
+    -- Basic validation of parameters
+    if typeof(actionKey) ~= "string" then return end
+    actionKey = actionKey:upper()
+    local cfg = ACTIONS[actionKey]
+    if not cfg then return end
+
+    -- Optional permission check
+    if ALLOWED_USERIDS then
+        local allowed = false
+        for _, id in ipairs(ALLOWED_USERIDS) do
+            if player.UserId == id then allowed = true break end
+        end
+        if not allowed then return end
+    end
+
+    -- Rate limit
+    local uid = player.UserId
+    local t = now()
+    if cooldowns[uid] and t < cooldowns[uid] then
+        return
+    end
+    cooldowns[uid] = t + (cfg.cooldown or 1)
+
+    -- Validate player's character and root
+    local char = player.Character
+    if not char then return end
+    local prt = getRootPart(char)
+    if not prt then return end
+    local ppos = prt.Position
+
+    -- Iterate humanoids in workspace
+    local descendants = Workspace:GetDescendants()
+    for _, obj in ipairs(descendants) do
+        if obj:IsA("Humanoid") then
+            local humanoid = obj
+            local model = humanoid.Parent
+            if model and model ~= char then
+                -- If restricting to NPCs, skip player characters
+                if RESTRICT_TO_NPCS and isPlayerCharacter(model) then
+                    -- skip players
+                else
+                    local root = getRootPart(model)
+                    if root then
+                        local dist = (root.Position - ppos).Magnitude
+                        if dist <= cfg.radius then
+                            if cfg.type == "damage" then
+                                pcall(applyDamage, humanoid, cfg.amount)
+                            elseif cfg.type == "delete" then
+                                pcall(deleteModel, humanoid)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- server admin with mobile keyboard (User: Darkonsupersmashbros) --
            -- Credits to the Creator --
 
 -- gObl00x Notification
