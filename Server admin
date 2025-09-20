@@ -1,22 +1,26 @@
 
 -- fling setup for server admin
 
--- LocalScript: Extreme Back-and-Forth Fling
--- Place in StarterPlayerScripts
+-- Server-side Auto Gear Attack
+-- Place in ServerScriptService
 
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
-local UserInputService = game:GetService("UserInputService")
-local LocalPlayer = Players.LocalPlayer
 local Workspace = game:GetService("Workspace")
-local RunService = game:GetService("RunService")
+
+local UseGearEvent = ReplicatedStorage:WaitForChild("UseGearEvent")
 
 -- CONFIG
-local FLING_RADIUS = 500
-local FLING_DURATION = 3
-local FLING_SPEED = 5000 -- times per second
-local FLING_DISTANCE = 10 -- studs per move toward/away
+local ACTIONS = {
+	Z = 500,
+	V = 20,
+	C = 150,
+}
 
--- Utility: get HumanoidRootPart
+-- Track active targets per player per key
+local activeTargets = {}
+
+-- Utility: get humanoid root part
 local function getRootPart(model)
 	if not model or not model:IsA("Model") then return nil end
 	return model:FindFirstChild("HumanoidRootPart") 
@@ -24,63 +28,97 @@ local function getRootPart(model)
 		or model:FindFirstChild("UpperTorso")
 end
 
--- Extreme back-and-forth fling
-local function extremeFling(target)
-	local char = LocalPlayer.Character
-	if not char then return end
-	local humanoid = char:FindFirstChildOfClass("Humanoid")
-	local root = getRootPart(char)
-	if not root then return end
+-- Get all damaging tools from a player
+local function getDamagingTools(player)
+	local tools = {}
+	local backpack = player:FindFirstChildOfClass("Backpack")
+	local char = player.Character
 
-	local targetRoot = getRootPart(target)
-	if not targetRoot or not targetRoot.CanCollide then return end
-
-	-- Temporarily allow physics manipulation
-	if humanoid then humanoid.PlatformStand = true end
-
-	local startTime = tick()
-	local direction = 1
-
-	-- Loop at very high frequency
-	local deltaTime = 1 / FLING_SPEED
-	while tick() - startTime < FLING_DURATION do
-		local moveVector = (targetRoot.Position - root.Position).Unit * FLING_DISTANCE * direction
-		root.CFrame = root.CFrame + moveVector
-		direction = -direction
-		task.wait(deltaTime)
+	local function isDamaging(tool)
+		if tool:IsA("Tool") then
+			local handle = tool:FindFirstChild("Handle")
+			if handle and handle:FindFirstChildWhichIsA("TouchTransmitter") then
+				return true
+			end
+		end
+		return false
 	end
 
-	-- Restore humanoid
-	if humanoid then humanoid.PlatformStand = false end
+	if backpack then
+		for _, tool in ipairs(backpack:GetChildren()) do
+			if isDamaging(tool) then table.insert(tools, tool) end
+		end
+	end
+	if char then
+		for _, tool in ipairs(char:GetChildren()) do
+			if isDamaging(tool) then table.insert(tools, tool) end
+		end
+	end
+	return tools
 end
 
--- Check all humanoids in radius
-local function checkAndFling()
-	local char = LocalPlayer.Character
-	if not char then return end
-	local root = getRootPart(char)
+-- Add targets in radius
+local function addTargets(player, key)
+	local radius = ACTIONS[key]
+	if not radius then return end
+	if not player.Character then return end
+
+	local root = getRootPart(player.Character)
 	if not root then return end
+	local pos = root.Position
+
+	activeTargets[player] = activeTargets[player] or {}
+	activeTargets[player][key] = activeTargets[player][key] or {}
 
 	for _, obj in ipairs(Workspace:GetDescendants()) do
-		if obj:IsA("Humanoid") then
+		if obj:IsA("Humanoid") and obj.Health > 0 then
 			local model = obj.Parent
-			if model and model ~= char then
+			if model and model ~= player.Character then
 				local hrp = getRootPart(model)
-				if hrp and hrp.CanCollide and (hrp.Position - root.Position).Magnitude <= FLING_RADIUS then
-					extremeFling(model)
+				if hrp and (hrp.Position - pos).Magnitude <= radius then
+					activeTargets[player][key][model] = obj
 				end
 			end
 		end
 	end
 end
 
--- Bind to a key (e.g., Z)
-UserInputService.InputBegan:Connect(function(input, gp)
-	if gp then return end
-	if input.KeyCode == Enum.KeyCode.Z then
-		checkAndFling()
-	end
+-- Server-side attack loop
+local function attackTargets(player, key)
+	local targets = activeTargets[player] and activeTargets[player][key]
+	if not targets then return end
+	local tools = getDamagingTools(player)
+	if #tools == 0 then return end
+
+	-- Loop to attack humanoids
+	spawn(function()
+		while targets do
+			for model, humanoid in pairs(targets) do
+				if humanoid.Health <= 0 then
+					targets[model] = nil
+				else
+					for _, tool in ipairs(tools) do
+						if tool.Parent ~= player.Character then
+							tool.Parent = player.Character -- ensure it's in character
+						end
+						if tool:FindFirstChild("Handle") then
+							tool:Activate() -- fire tool
+						end
+					end
+				end
+			end
+			wait(0.1) -- attack every 0.1 seconds
+		end
+	end)
+end
+
+-- RemoteEvent listener
+UseGearEvent.OnServerEvent:Connect(function(player, key)
+	if not ACTIONS[key] then return end
+	addTargets(player, key)
+	attackTargets(player, key)
 end)
+
 
 
 
