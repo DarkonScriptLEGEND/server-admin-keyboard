@@ -1,7 +1,7 @@
 
 -- damage / delete setup for server admin
 
--- LocalScript: AoE Kill + Two-Stage Restore + WalkSpeed Boosts
+-- LocalScript: AoE Kill + WalkSpeed Boosts
 -- Place in StarterPlayerScripts
 
 local Players = game:GetService("Players")
@@ -11,14 +11,11 @@ local Workspace = game:GetService("Workspace")
 
 -- CONFIG
 local ACTIONS = {
-	Z = { radius = 500, damage = math.huge },
+	Z = { radius = 500, damage = math.huge, ws = 80, wsDuration = 1.2, wsCooldown = 4.5 }, -- WalkSpeed 80 now
 	V = { radius = 20,  damage = 752000000 },
-	C = { radius = 150, damage = 9425010018203 },
+	C = { radius = 150, damage = 9425010018203, ws = 32, wsDuration = 4, wsDelay = 3, wsCooldown = 2 },
 }
 
-local canKill = true
-local killedModels = {}
-local eStage = 0 -- 0 = nothing, 1 = restored, 2 = unlocked again
 local keyCooldowns = { Z = 0, C = 0 }
 
 -- Utility: find HumanoidRootPart
@@ -29,44 +26,28 @@ local function getRootPart(model)
 		or model:FindFirstChild("UpperTorso")
 end
 
--- Store original colors
-local function storeOriginalColors(model)
-	local colors = {}
-	for _, part in ipairs(model:GetDescendants()) do
-		if part:IsA("BasePart") then
-			colors[part] = part.Color
-		end
-	end
-	return colors
-end
-
--- Deletion effect sequence
+-- Play deletion effects
 local function playDeletionEffect(model)
 	if not model or not model.Parent then return end
-	local originalColors = storeOriginalColors(model)
-	table.insert(killedModels, {model = model, colors = originalColors})
 
 	task.delay(3, function()
 		if not model or not model.Parent then return end
 
-		-- Shield blue
 		for _, part in ipairs(model:GetDescendants()) do
 			if part:IsA("BasePart") then
-				part.Color = Color3.fromRGB(0, 162, 232)
+				part.Color = Color3.fromRGB(0, 162, 232) -- Shield blue
 			end
 		end
 
 		task.delay(1.5, function()
 			if not model or not model.Parent then return end
-
-			-- Blue fire
 			for _, part in ipairs(model:GetDescendants()) do
 				if part:IsA("BasePart") then
 					local fire = Instance.new("ParticleEmitter")
 					fire.Texture = "rbxassetid://241594419"
 					fire.Lifetime = NumberRange.new(1)
 					fire.Rate = 200
-					fire.Speed = NumberRange.new(5,10)
+					fire.Speed = NumberRange.new(5, 10)
 					fire.Parent = part
 					task.delay(1, function()
 						if fire and fire.Parent then fire:Destroy() end
@@ -74,7 +55,6 @@ local function playDeletionEffect(model)
 				end
 			end
 
-			-- Play deletion sound
 			local sound = Instance.new("Sound")
 			sound.SoundId = "rbxassetid://12222185"
 			sound.Volume = 2
@@ -82,7 +62,6 @@ local function playDeletionEffect(model)
 			sound.Parent = model
 			sound:Destroy()
 
-			-- Delete model
 			task.delay(1, function()
 				if model and model.Parent then
 					model:Destroy()
@@ -92,11 +71,10 @@ local function playDeletionEffect(model)
 	end)
 end
 
--- Kill function with WalkSpeed logic
-local function affectHumanoids(radius, damage, key)
-	if not canKill then return end
-
-	-- Check cooldown
+-- Kill / damage function with WalkSpeed
+local function affectHumanoids(key)
+	local cfg = ACTIONS[key]
+	if not cfg then return end
 	local t = tick()
 	if keyCooldowns[key] and t < keyCooldowns[key] then return end
 
@@ -107,14 +85,13 @@ local function affectHumanoids(radius, damage, key)
 	local pos = root.Position
 	local humanoid = char:FindFirstChildOfClass("Humanoid")
 
-	-- Kill nearby humanoids
 	for _, obj in ipairs(Workspace:GetDescendants()) do
 		if obj:IsA("Humanoid") and obj.Health > 0 then
 			local model = obj.Parent
 			if model and model ~= char then
 				local rootPart = getRootPart(model)
-				if rootPart and (rootPart.Position - pos).Magnitude <= radius then
-					obj.Health = obj.Health - damage
+				if rootPart and (rootPart.Position - pos).Magnitude <= cfg.radius then
+					obj.Health = obj.Health - cfg.damage
 					if obj.Health <= 0 then
 						playDeletionEffect(model)
 					end
@@ -123,81 +100,47 @@ local function affectHumanoids(radius, damage, key)
 		end
 	end
 
-	-- Apply WalkSpeed changes
-	if humanoid then
+	-- WalkSpeed logic
+	if humanoid and cfg.ws then
 		if key == "Z" then
 			local originalSpeed = humanoid.WalkSpeed
-			humanoid.WalkSpeed = 40
-			task.delay(1.2, function()
+			humanoid.WalkSpeed = cfg.ws
+			task.delay(cfg.wsDuration, function()
 				if humanoid then
 					humanoid.WalkSpeed = originalSpeed
-					keyCooldowns["Z"] = tick() + 4.5 -- cooldown after effect
+					keyCooldowns[key] = tick() + cfg.wsCooldown
 				end
 			end)
 		elseif key == "C" then
-			task.delay(3, function()
+			task.delay(cfg.wsDelay or 0, function()
 				if humanoid then
 					local originalSpeed = humanoid.WalkSpeed
-					humanoid.WalkSpeed = 32
-					task.delay(4, function()
+					humanoid.WalkSpeed = cfg.ws
+					task.delay(cfg.wsDuration, function()
 						if humanoid then
 							humanoid.WalkSpeed = originalSpeed
-							keyCooldowns["C"] = tick() + 2 -- cooldown after effect
+							keyCooldowns[key] = tick() + cfg.wsCooldown
 						end
 					end)
 				end
 			end)
 		end
 	end
-
-	canKill = false
-	eStage = 0
-end
-
--- Restore killed models (first press of E)
-local function restoreKilled()
-	for _, data in ipairs(killedModels) do
-		local model = data.model
-		if model and not model.Parent then
-			model.Parent = Workspace
-		end
-		if data.colors and model then
-			for part, color in pairs(data.colors) do
-				if part and part.Parent then
-					part.Color = color
-				end
-			end
-		end
-	end
-	eStage = 1
-end
-
--- Unlock kill again (second press of E)
-local function unlockKill()
-	canKill = true
-	killedModels = {}
-	eStage = 0
 end
 
 -- Keybinds
 UserInputService.InputBegan:Connect(function(input, gp)
 	if gp then return end
 	local key = input.KeyCode
-
 	if key == Enum.KeyCode.Z then
-		affectHumanoids(ACTIONS.Z.radius, ACTIONS.Z.damage, "Z")
+		affectHumanoids("Z")
 	elseif key == Enum.KeyCode.V then
-		affectHumanoids(ACTIONS.V.radius, ACTIONS.V.damage, "V")
+		affectHumanoids("V")
 	elseif key == Enum.KeyCode.C then
-		affectHumanoids(ACTIONS.C.radius, ACTIONS.C.damage, "C")
-	elseif key == Enum.KeyCode.E then
-		if eStage == 0 then
-			restoreKilled()
-		elseif eStage == 1 then
-			unlockKill()
-		end
+		affectHumanoids("C")
 	end
 end)
+
 
 
 
